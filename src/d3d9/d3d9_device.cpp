@@ -4635,18 +4635,21 @@ namespace dxvk {
 
       constSet.dirty = false;
 
-      DxvkBufferSliceHandle slice = constSet.buffer->allocSlice();
-
-      EmitCs([
-        cBuffer = constSet.buffer,
-        cSlice  = slice
-      ] (DxvkContext* ctx) {
-        ctx->invalidateBuffer(cBuffer, cSlice);
-      });
-
       size_t dataSizeF = sizeof(Vector4)  * std::max(constSet.meta->maxConstIndexF, 1u);
       size_t dataSizeI = sizeof(Vector4i) * std::max(constSet.meta->maxConstIndexI, 1u);
       size_t dataSizeB = std::max(align(constSet.meta->maxConstIndexB, 128u) / 8u, 16u);
+
+      D3D9UPBufferSlice slice = AllocUpBuffer(dataSizeF + dataSizeI + dataSizeB);
+
+      EmitCs([cBufferSlice = std::move(slice.slice)] (DxvkContext* ctx) {
+        uint32_t bindingId = ShaderStage == DxsoProgramTypes::VertexShader
+          ? DxsoConstantBuffers::VSConstantBuffer
+          : DxsoConstantBuffers::PSConstantBuffer;
+        uint32_t slotId = computeResourceSlotId(
+          ShaderStage, DxsoBindingType::ConstantBuffer,
+          bindingId);
+        ctx->bindResourceBuffer(slotId, cBufferSlice);
+      });
 
       auto dstData = reinterpret_cast<uint8_t*>(slice.mapPtr);
       auto srcData = &src;
