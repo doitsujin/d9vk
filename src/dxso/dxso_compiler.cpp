@@ -194,6 +194,8 @@ namespace dxvk {
     else
       this->emitPsFinalize();
 
+    this->emitConstantBufferLayout();
+
     // Declare the entry point, we now have all the
     // information we need, including the interfaces
     m_module.addEntryPoint(m_entryPointId,
@@ -236,21 +238,15 @@ namespace dxvk {
 
 
   void DxsoCompiler::emitDclConstantBuffer() {
+    uint32_t uintType = getScalarTypeId(DxsoScalarType::Uint32);
+    m_constCountF = m_module.lateConst32(uintType);
+    m_constCountI = m_module.lateConst32(uintType);
+    m_constCountB = m_module.lateConst32(uintType);
+
     std::array<uint32_t, 3> members = {
-      // float f[256 or 224 or 8192]
-      m_module.defArrayTypeUnique(
-        getVectorTypeId({ DxsoScalarType::Float32, 4 }),
-        m_module.constu32(m_layout->floatCount)),
-
-      // int i[16 or 2048]
-      m_module.defArrayTypeUnique(
-        getVectorTypeId({ DxsoScalarType::Sint32, 4 }),
-        m_module.constu32(m_layout->intCount)),
-
-      // uvec4 boolBitmask[1 or 512]
-      m_module.defArrayTypeUnique(
-        getVectorTypeId({ DxsoScalarType::Uint32, 4 }),
-        m_module.constu32((m_layout->bitmaskCount + 3) / 4)),
+      m_module.defArrayTypeUnique(getVectorTypeId({ DxsoScalarType::Float32, 4 }), m_constCountF),
+      m_module.defArrayTypeUnique(getVectorTypeId({ DxsoScalarType::Sint32,  4 }), m_constCountI),
+      m_module.defArrayTypeUnique(getVectorTypeId({ DxsoScalarType::Uint32,  4 }), m_constCountB),
     };
 
     // Decorate array strides, this is required.
@@ -258,22 +254,17 @@ namespace dxvk {
     m_module.decorateArrayStride(members[1], 16);
     m_module.decorateArrayStride(members[2], 16);
 
-    const uint32_t structType =
-      m_module.defStructType(members.size(), members.data());
+    m_constStruct = m_module.defStructType(members.size(), members.data());
 
-    m_module.decorateBlock(structType);
+    m_module.decorateBlock(m_constStruct);
 
-    m_module.memberDecorateOffset(structType, 0, m_layout->floatOffset());
-    m_module.memberDecorateOffset(structType, 1, m_layout->intOffset());
-    m_module.memberDecorateOffset(structType, 2, m_layout->bitmaskOffset());
-
-    m_module.setDebugName(structType, "cbuffer_t");
-    m_module.setDebugMemberName(structType, 0, "f");
-    m_module.setDebugMemberName(structType, 1, "i");
-    m_module.setDebugMemberName(structType, 2, "b");
+    m_module.setDebugName(m_constStruct, "cbuffer_t");
+    m_module.setDebugMemberName(m_constStruct, 0, "f");
+    m_module.setDebugMemberName(m_constStruct, 1, "i");
+    m_module.setDebugMemberName(m_constStruct, 2, "b");
 
     m_cBuffer = m_module.newVar(
-      m_module.defPointerType(structType, spv::StorageClassUniform),
+      m_module.defPointerType(m_constStruct, spv::StorageClassUniform),
       spv::StorageClassUniform);
 
     m_module.setDebugName(m_cBuffer, "c");
@@ -332,6 +323,21 @@ namespace dxvk {
     m_oArray = m_module.newVar(
       ptrTypeId, spv::StorageClassPrivate);
     m_module.setDebugName(m_oArray, "o");
+  }
+
+
+  void DxsoCompiler::emitConstantBufferLayout() {
+    uint32_t constCountF = m_layout->floatCount;
+    uint32_t constCountI = m_layout->intCount;
+    uint32_t constCountB = (m_layout->bitmaskCount + 3) / 4;
+
+    m_module.setLateConst(m_constCountF, &constCountF);
+    m_module.setLateConst(m_constCountI, &constCountI);
+    m_module.setLateConst(m_constCountB, &constCountB);
+
+    m_module.memberDecorateOffset(m_constStruct, 0, m_layout->floatOffset());
+    m_module.memberDecorateOffset(m_constStruct, 1, m_layout->intOffset());
+    m_module.memberDecorateOffset(m_constStruct, 2, m_layout->bitmaskOffset());
   }
 
 

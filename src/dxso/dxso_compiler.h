@@ -281,6 +281,12 @@ namespace dxvk {
     // Ptr to the constant buffer array
     uint32_t m_cBuffer;
 
+    uint32_t m_constCountF = 0;
+    uint32_t m_constCountI = 0;
+    uint32_t m_constCountB = 0;
+
+    uint32_t m_constStruct = 0;
+
     ////////////////////////////////////////
     // Constant buffer deffed mappings
     std::array<uint32_t, caps::MaxFloatConstantsSoftware> m_cFloat;
@@ -354,6 +360,8 @@ namespace dxvk {
 
     void emitDclInputArray();
     void emitDclOutputArray();
+
+    void emitConstantBufferLayout();
 
     /////////////////////////////////
     // Shader initialization methods
