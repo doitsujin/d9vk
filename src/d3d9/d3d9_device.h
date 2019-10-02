@@ -87,6 +87,15 @@ namespace dxvk {
     void*           mapPtr = nullptr;
   };
 
+  struct D3D9UPBuffer {
+    Rc<DxvkBuffer> copyBuffer = nullptr;
+    Rc<DxvkBuffer> dataBuffer = nullptr;
+    VkDeviceSize   copyOffset = 0;
+    VkDeviceSize   dataOffset = 0;
+    VkDeviceSize   size       = 0;
+    void*          mapPtr     = nullptr;
+  };
+
   class D3D9DeviceEx final : public ComObjectClamp<IDirect3DDevice9Ex> {
     constexpr static uint32_t DefaultFrameLatency = 3;
     constexpr static uint32_t MaxFrameLatency     = 20;
@@ -898,7 +907,7 @@ namespace dxvk {
     Rc<DxvkBuffer>                  m_psFixedFunction;
     Rc<DxvkBuffer>                  m_psShared;
 
-    D3D9UPBufferSlice               m_upBuffer;
+    D3D9UPBuffer                    m_upBuffer;
 
     const D3D9Options               m_d3d9Options;
     const DxsoOptions               m_dxsoOptions;
@@ -942,7 +951,13 @@ namespace dxvk {
 
     void DetermineConstantLayouts(bool canSWVP);
 
-    D3D9UPBufferSlice AllocUpBuffer(VkDeviceSize size);
+    D3D9UPBufferSlice GetUpBufferSlice(D3D9UPBuffer* pUpBuffer, VkDeviceSize Size);
+
+    D3D9UPBufferSlice AllocUpBuffer(VkDeviceSize Size);
+
+    D3D9UPBuffer CreateUpBuffer(VkDeviceSize Size);
+
+    void FlushUpBuffer(D3D9UPBuffer* pUpBuffer);
 
     D3D9SwapChainEx* GetInternalSwapchain(UINT index);
 

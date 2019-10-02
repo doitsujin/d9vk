@@ -81,6 +81,7 @@ namespace dxvk {
     });
 
     CreateConstantBuffers();
+    m_upBuffer = CreateUpBuffer(1 << 20);  /* 1 MiB */
 
     if (!(BehaviorFlags & D3DCREATE_FPU_PRESERVE))
       SetupFPU();
@@ -3826,62 +3827,109 @@ namespace dxvk {
   }
 
 
-  D3D9UPBufferSlice D3D9DeviceEx::AllocUpBuffer(VkDeviceSize size) {
-    constexpr VkDeviceSize DefaultSize = 1 << 20;
+  D3D9UPBufferSlice D3D9DeviceEx::GetUpBufferSlice(D3D9UPBuffer* pUpBuffer, VkDeviceSize Size) {
+    D3D9UPBufferSlice result;
+    result.slice  = DxvkBufferSlice(pUpBuffer->dataBuffer, pUpBuffer->dataOffset, Size);
+    result.mapPtr = reinterpret_cast<char*>(pUpBuffer->mapPtr) + pUpBuffer->dataOffset;
 
-    constexpr VkMemoryPropertyFlags memoryFlags
-      = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
-      | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
-      | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    // Maintain UBO alignment requirements
+    pUpBuffer->dataOffset += align(Size, 256);
+    return result;
+  }
 
-    if (size <= DefaultSize) {
-      if (unlikely(!m_upBuffer.slice.defined())) {
-        DxvkBufferCreateInfo info;
-        info.size   = DefaultSize;
-        info.usage  = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT
-                    | VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
-        info.access = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT
-                    | VK_ACCESS_INDEX_READ_BIT;
-        info.stages = VK_PIPELINE_STAGE_VERTEX_INPUT_BIT;
 
-        m_upBuffer.slice  = DxvkBufferSlice(m_dxvkDevice->createBuffer(info, memoryFlags));
-        m_upBuffer.mapPtr = m_upBuffer.slice.mapPtr(0);
-      } else if (unlikely(m_upBuffer.slice.length() < size)) {
-        auto physSlice = m_upBuffer.slice.buffer()->allocSlice();
-
-        m_upBuffer.slice  = DxvkBufferSlice(m_upBuffer.slice.buffer());
-        m_upBuffer.mapPtr = physSlice.mapPtr;
-
-        EmitCs([
-          cBuffer = m_upBuffer.slice.buffer(),
-          cSlice  = physSlice
-        ] (DxvkContext* ctx) {
-          ctx->invalidateBuffer(cBuffer, cSlice);
-        });
+  D3D9UPBufferSlice D3D9DeviceEx::AllocUpBuffer(VkDeviceSize Size) {
+    if (unlikely(m_upBuffer.dataOffset + Size > m_upBuffer.size)) {
+      // Allocate a temporary buffer for very large data sets
+      if (unlikely(Size > m_upBuffer.size)) {
+        D3D9UPBuffer tmpBuffer = CreateUpBuffer(Size);
+        D3D9UPBufferSlice slice = GetUpBufferSlice(&tmpBuffer, Size);
+        FlushUpBuffer(&tmpBuffer);
+        return slice;
       }
 
-      D3D9UPBufferSlice result;
-      result.slice  = m_upBuffer.slice.subSlice(0, size);
-      result.mapPtr = reinterpret_cast<char*>(m_upBuffer.mapPtr) + m_upBuffer.slice.offset();
+      // Execute pending copies, then allocate new
+      // slices since the current ones are full
+      FlushUpBuffer(&m_upBuffer);
 
-      VkDeviceSize adjust = align(size, CACHE_LINE_SIZE);
-      m_upBuffer.slice = m_upBuffer.slice.subSlice(adjust, m_upBuffer.slice.length() - adjust);
-      return result;
-    } else {
-      // Create a temporary buffer for very large allocations
-      DxvkBufferCreateInfo info;
-      info.size   = size;
-      info.usage  = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT
-                  | VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
-      info.access = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT
-                  | VK_ACCESS_INDEX_READ_BIT;
-      info.stages = VK_PIPELINE_STAGE_VERTEX_INPUT_BIT;
+      auto dataSlice = m_upBuffer.dataBuffer->allocSlice();
+      auto copySlice = m_upBuffer.copyBuffer->allocSlice();
 
-      D3D9UPBufferSlice result;
-      result.slice  = DxvkBufferSlice(m_dxvkDevice->createBuffer(info, memoryFlags));
-      result.mapPtr = result.slice.mapPtr(0);
-      return result;
+      EmitCs([
+        cDataBuffer = m_upBuffer.dataBuffer,
+        cCopyBuffer = m_upBuffer.copyBuffer,
+        cDataSlice  = dataSlice,
+        cCopySlice  = copySlice
+      ] (DxvkContext* ctx) {
+        ctx->invalidateBuffer(cDataBuffer, cDataSlice);
+        ctx->invalidateBuffer(cCopyBuffer, cCopySlice);
+      });
+
+      m_upBuffer.copyOffset = 0;
+      m_upBuffer.dataOffset = 0;
+      m_upBuffer.mapPtr     = copySlice.mapPtr;
     }
+
+    return GetUpBufferSlice(&m_upBuffer, Size);
+  }
+
+
+  D3D9UPBuffer D3D9DeviceEx::CreateUpBuffer(VkDeviceSize Size) {
+    // UBO alignment requirements
+    Size = align(Size, 256);
+
+    DxvkBufferCreateInfo dataInfo;
+    dataInfo.size   = Size;
+    dataInfo.usage  = VK_BUFFER_USAGE_TRANSFER_DST_BIT
+                    | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT
+                    | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT
+                    | VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+    dataInfo.access = VK_ACCESS_TRANSFER_WRITE_BIT
+                    | VK_ACCESS_UNIFORM_READ_BIT
+                    | VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT
+                    | VK_ACCESS_INDEX_READ_BIT;
+    dataInfo.stages = VK_PIPELINE_STAGE_TRANSFER_BIT
+                    | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT
+                    | m_dxvkDevice->getShaderPipelineStages();
+    
+    DxvkBufferCreateInfo copyInfo;
+    copyInfo.size   = Size;
+    copyInfo.usage  = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    copyInfo.access = VK_ACCESS_TRANSFER_READ_BIT;
+    copyInfo.stages = VK_PIPELINE_STAGE_TRANSFER_BIT;
+
+    D3D9UPBuffer result;
+    result.dataBuffer = m_dxvkDevice->createBuffer(dataInfo,
+      VK_MEMORY_HEAP_DEVICE_LOCAL_BIT);
+    result.copyBuffer = m_dxvkDevice->createBuffer(copyInfo,
+      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    result.dataOffset = 0;
+    result.copyOffset = 0;
+    result.size       = Size;
+    result.mapPtr     = result.copyBuffer->mapPtr(0);
+    return result;
+  }
+
+
+  void D3D9DeviceEx::FlushUpBuffer(D3D9UPBuffer* pUpBuffer) {
+    if (pUpBuffer->copyOffset == pUpBuffer->dataOffset)
+      return;
+    
+    EmitCs([
+      cDataBuffer = pUpBuffer->dataBuffer,
+      cCopyBuffer = pUpBuffer->copyBuffer,
+      cDataOffset = pUpBuffer->dataOffset,
+      cCopyOffset = pUpBuffer->copyOffset
+    ] (DxvkContext* ctx) {
+      ctx->copyBufferDma(
+        cDataBuffer, cCopyOffset,
+        cCopyBuffer, cCopyOffset,
+        cDataOffset - cCopyOffset);
+    });
+
+    // Update copied buffer range
+    pUpBuffer->copyOffset = pUpBuffer->dataOffset;
   }
 
 
@@ -4707,6 +4755,8 @@ namespace dxvk {
     m_initializer->Flush();
 
     if (m_csIsBusy || !m_csChunk->empty()) {
+      FlushUpBuffer(&m_upBuffer);
+
       // Add commands to flush the threaded
       // context, then flush the command list
       EmitCs([](DxvkContext* ctx) {
