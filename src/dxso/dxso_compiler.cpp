@@ -247,27 +247,16 @@ namespace dxvk {
         getVectorTypeId({ DxsoScalarType::Sint32, 4 }),
         m_module.constu32(m_layout->intCount)),
 
-      //    uint32_t boolBitmask
-      // or uvec4    boolBitmask[512]
-      // Defined later...
-      0
+      // uvec4 boolBitmask[1 or 512]
+      m_module.defArrayTypeUnique(
+        getVectorTypeId({ DxsoScalarType::Uint32, 4 }),
+        m_module.constu32((m_layout->bitmaskCount + 3) / 4)),
     };
 
     // Decorate array strides, this is required.
     m_module.decorateArrayStride(members[0], 16);
     m_module.decorateArrayStride(members[1], 16);
-
-    if (m_layout->bitmaskCount == 1) {
-      members[2] = getScalarTypeId(DxsoScalarType::Uint32);
-    }
-    else {
-      // Must be a multiple of 4 otherwise.
-      members[2] = m_module.defArrayTypeUnique(
-        getVectorTypeId({ DxsoScalarType::Uint32, 4 }),
-        m_module.constu32(m_layout->bitmaskCount / 4));
-
-      m_module.decorateArrayStride(members[2], 16);
-    }
+    m_module.decorateArrayStride(members[2], 16);
 
     const uint32_t structType =
       m_module.defStructType(members.size(), members.data());
@@ -905,34 +894,25 @@ namespace dxvk {
           m_module.constvec4f32(0.0f, 0.0f, 0.0f, 0.0f));
       }
     } else {
-      // Bool constants have no relative indexing, so we can do the bitfield
-      // magic for SWVP at compile time.
+      // Bool constants have no relative indexing, so we can
+      // do the bitfield magic for SWVP at compile time.
+      uint32_t bitfieldId = reg.id.num / 32;
+      uint32_t bitIndex   = reg.id.num % 32;
 
-      uint32_t uintType  = getScalarTypeId(DxsoScalarType::Uint32);
-      uint32_t uvec4Type = getVectorTypeId({ DxsoScalarType::Uint32, 4 });
+      std::array<uint32_t, 3> indices = {
+        m_module.constu32(2),
+        m_module.constu32(bitfieldId / 4),
+        m_module.constu32(bitfieldId % 4) };
 
-      // Fast path if the bool count in the constant layout
-      // is not more than 32.
-      bool fastPath = m_layout->boolCount <= 32;
-
-      std::array<uint32_t, 2> indices = { m_module.constu32(2), m_module.constu32(reg.id.num / 128) };
-
-      uint32_t indexCount = m_layout->bitmaskCount == 1 ? 1 : 2;
-      uint32_t accessType = m_layout->bitmaskCount == 1 ? uintType : uvec4Type;
-
+      uint32_t uintType = getScalarTypeId(DxsoScalarType::Uint32);
       uint32_t ptrId = m_module.opAccessChain(
-        m_module.defPointerType(accessType, spv::StorageClassUniform),
-        m_cBuffer, indexCount, indices.data());
+        m_module.defPointerType(uintType, spv::StorageClassUniform),
+        m_cBuffer, indices.size(), indices.data());
 
-      uint32_t bitIdx = m_module.consti32(reg.id.num % 32);
-
-      uint32_t bitfield = m_module.opLoad(accessType, ptrId);
-      if (m_layout->bitmaskCount != 1) {
-        uint32_t index = (reg.id.num % 128) / 32;
-        bitfield = m_module.opCompositeExtract(uintType, bitfield, 1, &index);
-      }
-      uint32_t bit = m_module.opBitFieldUExtract(
-        uintType, bitfield, bitIdx, m_module.consti32(1));
+      uint32_t bit = m_module.opBitFieldUExtract(uintType,
+        m_module.opLoad(uintType, ptrId),
+        m_module.constu32(bitIndex),
+        m_module.consti32(1));
 
       result.id = m_module.opINotEqual(
         getVectorTypeId(result.type),
