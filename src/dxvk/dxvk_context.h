@@ -321,6 +321,26 @@ namespace dxvk {
             VkDeviceSize          numBytes);
     
     /**
+     * \brief Uses transfer queue to copy buffer data
+     * 
+     * Only safe if the destination buffer range is not
+     * being used by the GPU at command submission time.
+     * The source buffer is assumed to be read-only on
+     * the GPU; no hazard tracking will be performed.
+     * \param [in] dstBuffer Destination buffer
+     * \param [in] dstOffset Destination data offset
+     * \param [in] srcBuffer Source buffer
+     * \param [in] srcOffset Source data offset
+     * \param [in] numBytes Number of bytes to copy
+     */
+    void copyBufferDma(
+      const Rc<DxvkBuffer>&       dstBuffer,
+            VkDeviceSize          dstOffset,
+      const Rc<DxvkBuffer>&       srcBuffer,
+            VkDeviceSize          srcOffset,
+            VkDeviceSize          numBytes);
+    
+    /**
      * \brief Copies overlapping buffer region
      * 
      * Can be used to copy potentially overlapping

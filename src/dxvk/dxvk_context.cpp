@@ -815,6 +815,37 @@ namespace dxvk {
   }
   
   
+  void DxvkContext::copyBufferDma(
+    const Rc<DxvkBuffer>&       dstBuffer,
+          VkDeviceSize          dstOffset,
+    const Rc<DxvkBuffer>&       srcBuffer,
+          VkDeviceSize          srcOffset,
+          VkDeviceSize          numBytes) {
+    auto dstSlice = dstBuffer->getSliceHandle(dstOffset, numBytes);
+    auto srcSlice = srcBuffer->getSliceHandle(srcOffset, numBytes);
+
+    VkBufferCopy region;
+    region.srcOffset = srcSlice.offset;
+    region.dstOffset = dstSlice.offset;
+    region.size      = numBytes;
+
+    m_cmd->cmdCopyBuffer(DxvkCmdBuffer::SdmaBuffer,
+      srcSlice.handle, dstSlice.handle, 1, &region);
+
+    m_sdmaBarriers.releaseBuffer(
+      m_initBarriers, dstSlice,
+      m_device->queues().transfer.queueFamily,
+      VK_PIPELINE_STAGE_TRANSFER_BIT,
+      VK_ACCESS_TRANSFER_WRITE_BIT,
+      m_device->queues().graphics.queueFamily,
+      dstBuffer->info().stages,
+      dstBuffer->info().access);
+    
+    m_cmd->trackResource<DxvkAccess::Write>(dstBuffer);
+    m_cmd->trackResource<DxvkAccess::Read>(srcBuffer);
+  }
+
+
   void DxvkContext::copyBufferRegion(
     const Rc<DxvkBuffer>&       dstBuffer,
           VkDeviceSize          dstOffset,
@@ -2076,31 +2107,15 @@ namespace dxvk {
   void DxvkContext::uploadBuffer(
     const Rc<DxvkBuffer>&           buffer,
     const void*                     data) {
-    auto bufferSlice = buffer->getSliceHandle();
+    auto bufferSize = buffer->info().size;
 
-    auto stagingSlice = m_staging.alloc(CACHE_LINE_SIZE, bufferSlice.length);
-    auto stagingHandle = stagingSlice.getSliceHandle();
-    std::memcpy(stagingHandle.mapPtr, data, bufferSlice.length);
+    auto stagingSlice = m_staging.alloc(CACHE_LINE_SIZE, bufferSize);
+    std::memcpy(stagingSlice.mapPtr(0), data, bufferSize);
 
-    VkBufferCopy region;
-    region.srcOffset = stagingHandle.offset;
-    region.dstOffset = bufferSlice.offset;
-    region.size      = bufferSlice.length;
-
-    m_cmd->cmdCopyBuffer(DxvkCmdBuffer::SdmaBuffer,
-      stagingHandle.handle, bufferSlice.handle, 1, &region);
-
-    m_sdmaBarriers.releaseBuffer(
-      m_initBarriers, bufferSlice,
-      m_device->queues().transfer.queueFamily,
-      VK_PIPELINE_STAGE_TRANSFER_BIT,
-      VK_ACCESS_TRANSFER_WRITE_BIT,
-      m_device->queues().graphics.queueFamily,
-      buffer->info().stages,
-      buffer->info().access);
-    
-    m_cmd->trackResource<DxvkAccess::Read>(stagingSlice.buffer());
-    m_cmd->trackResource<DxvkAccess::Write>(buffer);
+    this->copyBufferDma(buffer, 0,
+      stagingSlice.buffer(),
+      stagingSlice.offset(),
+      stagingSlice.length());
   }
 
 
