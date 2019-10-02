@@ -2553,9 +2553,9 @@ namespace dxvk {
 
     if (newShader && oldShader) {
       m_consts[DxsoProgramTypes::VertexShader].dirty
-        |= newShader->GetMeta().maxConstIndexF > oldShader->GetMeta().maxConstIndexF
-        || newShader->GetMeta().maxConstIndexI > oldShader->GetMeta().maxConstIndexI
-        || newShader->GetMeta().maxConstIndexB > oldShader->GetMeta().maxConstIndexB;
+        |= newShader->GetMeta().maxConstIndexF != oldShader->GetMeta().maxConstIndexF
+        || newShader->GetMeta().maxConstIndexI != oldShader->GetMeta().maxConstIndexI
+        || newShader->GetMeta().maxConstIndexB != oldShader->GetMeta().maxConstIndexB;
     }
 
     changePrivate(m_state.vertexShader, shader);
@@ -2879,9 +2879,9 @@ namespace dxvk {
 
     if (newShader && oldShader) {
       m_consts[DxsoProgramTypes::PixelShader].dirty
-        |= newShader->GetMeta().maxConstIndexF > oldShader->GetMeta().maxConstIndexF
-        || newShader->GetMeta().maxConstIndexI > oldShader->GetMeta().maxConstIndexI
-        || newShader->GetMeta().maxConstIndexB > oldShader->GetMeta().maxConstIndexB;
+        |= newShader->GetMeta().maxConstIndexF != oldShader->GetMeta().maxConstIndexF
+        || newShader->GetMeta().maxConstIndexI != oldShader->GetMeta().maxConstIndexI
+        || newShader->GetMeta().maxConstIndexB != oldShader->GetMeta().maxConstIndexB;
     }
 
     changePrivate(m_state.pixelShader, shader);
@@ -4579,7 +4579,7 @@ namespace dxvk {
 
   template <DxsoProgramType ShaderStage>
   void D3D9DeviceEx::UploadConstants() {
-    auto UploadHelper = [&](auto& src, auto& layout, const auto& shader) {
+    auto UploadHelper = [&](auto& src, const auto& shader) {
       D3D9ConstantSets& constSet = m_consts[ShaderStage];
 
       if (!constSet.dirty)
@@ -4589,9 +4589,6 @@ namespace dxvk {
 
       DxvkBufferSliceHandle slice = constSet.buffer->allocSlice();
 
-      auto dstData = reinterpret_cast<uint8_t*>(slice.mapPtr);
-      auto srcData = &src;
-
       EmitCs([
         cBuffer = constSet.buffer,
         cSlice  = slice
@@ -4599,16 +4596,26 @@ namespace dxvk {
         ctx->invalidateBuffer(cBuffer, cSlice);
       });
 
+      size_t dataSizeF = sizeof(Vector4)  * std::max(constSet.meta->maxConstIndexF, 1u);
+      size_t dataSizeI = sizeof(Vector4i) * std::max(constSet.meta->maxConstIndexI, 1u);
+      size_t dataSizeB = std::max(align(constSet.meta->maxConstIndexB, 128u) / 8u, 16u);
+
+      auto dstData = reinterpret_cast<uint8_t*>(slice.mapPtr);
+      auto srcData = &src;
+
       if (constSet.meta->maxConstIndexF)
-        std::memcpy(dstData + layout.floatOffset(),   srcData->fConsts.data(), constSet.meta->maxConstIndexF * 4 * sizeof(float));
+        std::memcpy(dstData, srcData->fConsts.data(), dataSizeF);
+
+      dstData += dataSizeF;
       if (constSet.meta->maxConstIndexI)
-        std::memcpy(dstData + layout.intOffset(),     srcData->iConsts.data(), constSet.meta->maxConstIndexI * 4 * sizeof(INT));
+        std::memcpy(dstData, srcData->iConsts.data(), dataSizeI);
+
+      dstData += dataSizeI;
       if (constSet.meta->maxConstIndexB)
-        std::memcpy(dstData + layout.bitmaskOffset(), srcData->bConsts.data(), layout.bitmaskSize());
+        std::memcpy(dstData, srcData->bConsts.data(), dataSizeB);
 
       if (constSet.meta->needsConstantCopies) {
         Vector4* data = reinterpret_cast<Vector4*>(slice.mapPtr);
-
         auto& shaderConsts = GetCommonShader(shader)->GetConstants();
 
         for (const auto& constant : shaderConsts)
@@ -4617,8 +4624,8 @@ namespace dxvk {
     };
 
     return ShaderStage == DxsoProgramTypes::VertexShader
-      ? UploadHelper(m_state.vsConsts, m_vsLayout, m_state.vertexShader)
-      : UploadHelper(m_state.psConsts, m_psLayout, m_state.pixelShader);
+      ? UploadHelper(m_state.vsConsts, m_state.vertexShader)
+      : UploadHelper(m_state.psConsts, m_state.pixelShader);
   }
 
 

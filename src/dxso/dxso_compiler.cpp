@@ -327,17 +327,17 @@ namespace dxvk {
 
 
   void DxsoCompiler::emitConstantBufferLayout() {
-    uint32_t constCountF = m_layout->floatCount;
-    uint32_t constCountI = m_layout->intCount;
-    uint32_t constCountB = (m_layout->bitmaskCount + 3) / 4;
+    uint32_t constCountF = std::max(1u, m_meta.maxConstIndexF);
+    uint32_t constCountI = std::max(1u, m_meta.maxConstIndexI);
+    uint32_t constCountB = std::max(1u, align(m_meta.maxConstIndexB, 128) / 128);
 
     m_module.setLateConst(m_constCountF, &constCountF);
     m_module.setLateConst(m_constCountI, &constCountI);
     m_module.setLateConst(m_constCountB, &constCountB);
 
-    m_module.memberDecorateOffset(m_constStruct, 0, m_layout->floatOffset());
-    m_module.memberDecorateOffset(m_constStruct, 1, m_layout->intOffset());
-    m_module.memberDecorateOffset(m_constStruct, 2, m_layout->bitmaskOffset());
+    m_module.memberDecorateOffset(m_constStruct, 0, 0);
+    m_module.memberDecorateOffset(m_constStruct, 1, 16 * (constCountF));
+    m_module.memberDecorateOffset(m_constStruct, 2, 16 * (constCountF + constCountI));
   }
 
 
